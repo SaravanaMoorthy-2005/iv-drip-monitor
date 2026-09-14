@@ -3,7 +3,7 @@ import ts from 'typescript';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 await fs.mkdir('.test-runtime',{recursive:true});
-for(const [name,extension] of [['engine','ts'],['providers','ts'],['store','tsx']]){
+for(const [name,extension] of [['engine','ts'],['providers','ts'],['store','tsx'],['equipment','ts']]){
  const src=await fs.readFile(`lib/tissense/${name}.${extension}`,'utf8');
  const code=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replaceAll("'./engine'","'./engine.mjs'").replaceAll("'./providers'","'./providers.mjs'");
  await fs.writeFile(`.test-runtime/${name}.mjs`,code);
@@ -11,6 +11,36 @@ for(const [name,extension] of [['engine','ts'],['providers','ts'],['store','tsx'
 const {reducer}=await import('../.test-runtime/store.mjs');
 const now=Date.now();
 const init=()=>reducer(undefined,{type:'init',now});
+const {equipmentModel}=await import('../.test-runtime/equipment.mjs');
+test('equipment visuals track patient scenarios without mutating readings or other patients',()=>{
+ const start=init(),original=structuredClone(start.patients);
+ for(const [scenario,id,value] of [['Low bottle','bottle',12],['High pressure','pressure',90],['Air bubble','air',true],['Critical IV-site warning','moisture',75]]){
+  const next=reducer(start,{type:'scenario',id:start.patients[0].patient.id,name:scenario,now});
+  const model=equipmentModel(next.patients[0],now);
+  assert.equal(model.sensors.find(x=>x.id===id).reading,value);
+  assert.equal(model.sensors.find(x=>x.id===id).status,scenario==='Critical IV-site warning'?'critical':'warning');
+  assert.deepEqual(next.patients.slice(1),original.slice(1));
+ }
+ assert.deepEqual(start.patients,original);
+});
+test('equipment never animates unknown, stale or zero-rate flow and gates modules independently',()=>{
+ const p=init().patients[0];
+ assert.equal(equipmentModel(p,now).dropSeconds,60/p.esp32_1.drop_rate);
+ for(const rate of [0,null]){const q=structuredClone(p);q.esp32_1.drop_rate=rate;assert.equal(equipmentModel(q,now).flowing,false);}
+ const stale=structuredClone(p);stale.esp32_1.last_received=now-16000;
+ const model=equipmentModel(stale,now);assert.equal(model.flowing,false);assert.equal(model.bottle,null);assert.equal(model.moisture,p.esp32_2.moisture);
+ const invalid=structuredClone(p);invalid.invalid=['Drop rate'];assert.equal(equipmentModel(invalid,now).flowing,false);
+ const offline=reducer(init(),{type:'scenario',id:p.patient.id,name:'Node-RED disconnected',now});
+ assert.ok(equipmentModel(offline.patients[0],now).sensors.every(x=>x.status==='offline'));
+});
+test('equipment warnings follow exact thresholds and reflect nurse recovery',()=>{
+ let state=init();const alert=state.alerts.find(x=>x.key==='bottle');
+ state=reducer(state,{type:'ack',id:alert.id,now});state=reducer(state,{type:'care',id:alert.id,action:'IV bottle replaced',recover:true,now});
+ assert.equal(equipmentModel(state.patients.find(x=>x.patient.id===alert.patientId),now).bottle,75);
+ const p=structuredClone(state.patients[0]);p.esp32_1.bottle_level=15;p.esp32_1.pressure=85;p.esp32_2.moisture=70;p.esp32_2.strain=59;
+ let model=equipmentModel(p,now);assert.equal(model.sensors[0].status,'warning');assert.equal(model.sensors[3].status,'normal');assert.equal(model.site,'warning');
+ p.esp32_2.strain=60;assert.equal(equipmentModel(p,now).site,'critical');
+});
 test('queued older snapshots cannot overwrite a completed nurse action',()=>{
  const older=init();const a=older.alerts.find(x=>x.key==='bottle');
  let current=reducer(older,{type:'ack',id:a.id,now});
