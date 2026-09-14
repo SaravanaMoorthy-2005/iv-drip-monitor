@@ -26,6 +26,17 @@ Open http://localhost:5173. The first visit opens the demo dashboard. Settings â
 
 ## Data architecture
 
+### Completing an alert response
+
+1. **Acknowledge** records that the nurse has seen the warning.
+2. **Record action** documents the action, optional note, nurse and timestamp.
+3. **Save action Â· await readings** places the episode under **Awaiting recovery**. Live sensor values are never changed by documentation.
+4. Once valid current readings clear the condition, the episode automatically becomes **Resolved**, leaves active alerts and remains in history and the timeline. A recurring condition creates a new episode requiring a fresh response.
+
+In demo mode, **Save action & simulate recovery** explicitly changes only the selected alert's relevant simulated sensor values. A combined IV-site recovery clears its related moisture and strain episodes together, with shared documentation. Other patient readings and unrelated warnings are preserved. This control is blocked for live, stale, offline or invalid sensor data. For connection faults, restore the connection in the demo studio or wait for valid live packets. General notes do not replace the structured action workflow.
+
+Action records and lifecycle changes are saved immediately to the local demo archive. The alert center separates **Needs response**, **Awaiting recovery**, and **Resolved**, while sensor severity stays visible until actual recovery.
+
 `lib/tissense/engine.ts` contains the normalized patient model, validation, immutable threshold configuration, derived statuses and alert reconciliation. `lib/tissense/store.tsx` holds separately managed current readings, alert episodes, time-series samples, notification state, nurse/device activity, preferences and handover.
 
 `lib/tissense/providers.ts` defines `SensorDataProvider`, `SimulationDataProvider`, `NodeRedProvider`, `WebSocketProvider`, `RESTProvider`, and `MQTTBridgeProvider`. MQTT traffic must be bridged through Node-RED WebSocket transport. No raw MQTT/TCP connection is made by the browser.
