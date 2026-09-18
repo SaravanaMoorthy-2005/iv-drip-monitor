@@ -3,14 +3,49 @@ import ts from 'typescript';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 await fs.mkdir('.test-runtime',{recursive:true});
-for(const [name,extension] of [['engine','ts'],['providers','ts'],['store','tsx'],['equipment','ts']]){
+for(const [name,extension] of [['engine','ts'],['providers','ts'],['store','tsx'],['equipment','ts'],['care-assistant','ts']]){
  const src=await fs.readFile(`lib/tissense/${name}.${extension}`,'utf8');
  const code=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replaceAll("'./engine'","'./engine.mjs'").replaceAll("'./providers'","'./providers.mjs'");
- await fs.writeFile(`.test-runtime/${name}.mjs`,code);
+ await fs.writeFile(`.test-runtime/${name}.mjs`,code.replaceAll("'./care-assistant'","'./care-assistant.mjs'"));
 }
 const {reducer}=await import('../.test-runtime/store.mjs');
 const now=Date.now();
 const init=()=>reducer(undefined,{type:'init',now});
+const {patientCareState,getCareRecommendation}=await import('../.test-runtime/care-assistant.mjs');
+test('one click recovers critical and linked site alerts, updates priority and retires old notifications',()=>{
+ const before=init(),critical=before.alerts.find(a=>a.key==='critical');
+ const after=reducer(before,{type:'assist',id:critical.id,recover:true,now});
+ const p=after.patients.find(p=>p.patient.id===critical.patientId),care=patientCareState(p,after.alerts,now);
+ assert.equal(care.status,'normal');assert.equal(care.active.length,0);assert.equal(care.label,'Recovery confirmed');
+ for(const a of after.alerts.filter(a=>a.patientId===p.patient.id)){assert.equal(a.resolved,true);assert.equal(a.actions.length,1);assert.equal(a.actions[0].assisted,true);}
+ assert.ok(after.notifications.filter(n=>n.patientId===p.patient.id&&n.group!=='Resolved').every(n=>n.read));
+ assert.ok(before.notifications.filter(n=>n.patientId===p.patient.id).every(n=>!n.read));
+ assert.deepEqual(after.patients.filter(x=>x.patient.id!==p.patient.id),before.patients.filter(x=>x.patient.id!==p.patient.id));
+ assert.equal(reducer(after,{type:'assist',id:critical.id,recover:true,now}),after);
+ const reopened=reducer(undefined,{type:'init',saved:JSON.parse(JSON.stringify(after)),now:now+10000});
+ assert.equal(patientCareState(reopened.patients.find(x=>x.patient.id===p.patient.id),reopened.alerts,now+10000).status,'normal');
+});
+test('combined assessment puts linked episodes under monitoring without hiding critical telemetry',()=>{
+ let s=init();const a=s.alerts.find(x=>x.key==='critical');
+ s=reducer(s,{type:'ack',id:a.id,now});s=reducer(s,{type:'care',id:a.id,action:'IV site inspected',now});
+ const care=patientCareState(s.patients.find(p=>p.patient.id===a.patientId),s.alerts,now);
+ assert.equal(care.status,'critical');assert.equal(care.pending.length,0);assert.equal(care.awaiting,true);assert.equal(care.active.length,3);
+});
+test('recommendations cannot recover live, stale, invalid or signed-out data',()=>{
+ const s=init(),a=s.alerts.find(x=>x.key==='critical');
+ for(const blocked of [{...s,mode:'live'},{...s,session:false},{...s,patients:s.patients.map(p=>({...p,esp32_2:{...p.esp32_2,last_received:now-16000}}))},{...s,patients:s.patients.map(p=>({...p,invalid:['Moisture']}))}]){
+  assert.equal(reducer(blocked,{type:'assist',id:a.id,recover:true,now}),blocked);
+ }
+ const p=s.patients.find(p=>p.patient.id===a.patientId);assert.ok(getCareRecommendation(a,p,now).steps.length>0);
+});
+test('critical is the leading condition and unrelated bottle warnings survive site recovery',()=>{
+ let s=init();const a=s.alerts.find(x=>x.key==='critical'),id=a.patientId;
+ s=reducer(s,{type:'sensor',id,module:'esp32_1',key:'bottle_level',value:10,now});
+ let care=patientCareState(s.patients.find(p=>p.patient.id===id),s.alerts,now);assert.equal(care.primary.key,'critical');
+ s=reducer(s,{type:'assist',id:a.id,recover:true,now});care=patientCareState(s.patients.find(p=>p.patient.id===id),s.alerts,now);
+ assert.equal(care.status,'warning');assert.equal(care.primary.key,'bottle');assert.equal(care.pending.length,1);
+ const bottle=care.primary;s=reducer(s,{type:'assist',id:bottle.id,recover:true,now});assert.equal(patientCareState(s.patients.find(p=>p.patient.id===id),s.alerts,now).status,'normal');
+});
 const {equipmentModel}=await import('../.test-runtime/equipment.mjs');
 test('equipment visuals track patient scenarios without mutating readings or other patients',()=>{
  const start=init(),original=structuredClone(start.patients);

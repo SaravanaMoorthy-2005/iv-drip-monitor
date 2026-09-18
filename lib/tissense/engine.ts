@@ -1,7 +1,7 @@
 export const THRESHOLDS = Object.freeze({ bottle:15, pressure:85, moistureWarning:50, moistureCritical:70, strainWarning:50, strainCritical:60 });
 export type Status = 'critical'|'warning'|'normal'|'offline';
 export type Patient = { patient:{id:string;name:string;bed:string;room:string;ward:string;nurse:string;started:number}; esp32_1:{connected:boolean;bottle_level:number|null;drop_count:number|null;drop_rate:number|null;pressure:number|null;air_bubble:boolean|null;last_received:number};esp32_2:{connected:boolean;moisture:number|null;strain:number|null;last_received:number};gateway:{esp_now:boolean;wifi:boolean;node_red:boolean};system:{mode:'simulation'|'live';timestamp:number};drops:number[];invalid:string[] };
-export type CareAction = {id:string;action:string;note:string;nurse:string;at:number;simulatedRecovery:boolean};
+export type CareAction = {id:string;action:string;note:string;nurse:string;at:number;simulatedRecovery:boolean;assisted?:boolean};
 export type Alert = { id:string;patientId:string;bed:string;source:string;parameter:string;currentValue:string;threshold:string;message:string;severity:Status;createdAt:number;acknowledged:boolean;acknowledgedBy?:string;acknowledgedAt?:number;resolved:boolean;resolvedAt?:number;key:string;lastObserved:number;actions?:CareAction[] };
 export const getAlertWorkflow=(a:Alert)=>a.resolved?'Resolved':a.actions?.length?'Awaiting recovery':a.acknowledged?'Acknowledged':'New';
 export const recoveryValues:Record<string,string>={bottle:'Bottle level → 75%',pressure:'Tube pressure → 35%',air:'Air bubble → not detected',moisture:'Moisture → 25%',strain:'Strain → 20%',critical:'Moisture → 25%, strain → 20%'};
@@ -24,7 +24,7 @@ export function simulateAlertRecovery(p:Patient,a:Alert,now=Date.now()):Patient{
  return q;
 }
 export type Event = {id:string;patientId:string;message:string;at:number;kind:string;nurse?:string};
-export type Notification = {id:string;patientId:string;message:string;at:number;group:string;read:boolean};
+export type Notification = {id:string;patientId:string;message:string;at:number;group:string;read:boolean;alertId?:string};
 export const valid=(n:unknown):n is number=>typeof n==='number'&&Number.isFinite(n)&&n>=0&&n<=100;
 export const getBottleStatus=(n:number|null)=>n===null?'offline':n<=THRESHOLDS.bottle?'warning':'normal';
 export const getPressureStatus=(n:number|null)=>n===null?'offline':n>THRESHOLDS.pressure?'warning':'normal';

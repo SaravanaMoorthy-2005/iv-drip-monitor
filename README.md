@@ -78,3 +78,12 @@ npm run build
 ```
 
 Tests cover all specified threshold boundaries, ten scenarios, deduplication, acknowledgement retention, resolution/retriggering, invalid input, stale/connection states, drop counting and urgency sorting. The browser workflow additionally verifies notes, scenarios, notifications, history, charts, login, handover and responsive layouts.
+
+
+### Care assistant and glass monitoring cards
+
+Each active alert has a rule-based care suggestion with its triggering value, configured threshold and suggested checks. The AI-assist preview is deterministic; no AI model is connected and no patient data is sent to an external AI service. Local clinical protocols govern real care. Site-assessment guidance links to the CDC catheter recommendations.
+
+In demo mode, **Apply demo recovery** atomically acknowledges the alert, records the simulated action, updates only affected readings and reconciles all linked episodes. **Record action** opens a prefilled form with **Complete action & recover demo** as its primary control. Documentation-only actions leave readings unchanged and show **Awaiting sensor recovery**; a combined critical-site assessment also covers its linked moisture/strain alerts. Live mode never changes telemetry through either action. Completed alert notifications are retained but marked read.
+
+The supplied liquid-glass template is adapted in `components/ui/liquid-glass-card.tsx`, `liquid-glass-button.tsx` and `financial-score-cards.tsx`. Its semicircle gauges display measured values with threshold-based colors, accessible labels, unique gradient IDs and reduced-motion support. Zero remains a valid reading and missing data is shown as unavailable.

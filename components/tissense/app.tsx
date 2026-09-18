@@ -10,6 +10,7 @@ import {Pick} from './ui';
 import {Dashboard} from './dashboard';
 import {PatientDetail,AlertCenter,WardView,HistoryView,DeviceView,HandoverView,NotificationsView,DemoView,SettingsView,LoginView} from './views';
 import './tissense.css';
+import './liquid-theme.css';
 const nav=[['Nurse Home',LayoutDashboard],['Patients',Users],['Alerts',ShieldAlert],['Ward View',Building2],['Trends & History',ChartNoAxesCombined],['Devices',Cpu],['Handover',ClipboardList]] as const;
 const routes:Record<string,string>={'Nurse Home':'dashboard','Patients':'patients','Alerts':'alerts','Ward View':'ward','Trends & History':'history','Devices':'devices','Handover':'handover','Notifications':'notifications','Settings':'settings','Demo studio':'demo'};
 export default function Tissense(){const {state:s,dispatch:d}=useMonitoring();const [view,setView]=useState('Nurse Home'),[selected,setSelected]=useState<string|null>(null),[filter,setFilter]=useState('All patients'),[dark,setDark]=useState(false),[ward,setWard]=useState('Ward A');const heard=useRef(new Set<string>());
