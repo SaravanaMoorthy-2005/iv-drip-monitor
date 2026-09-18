@@ -14,9 +14,10 @@ export function CareActionDialog({open,setOpen,alertId,s,d}:any){
  const active=!!alert&&!alert.resolved&&alert.acknowledged&&s.session;
  const ready=active&&action!=='Select action'&&(action!=='Custom action'||!!note.trim());
  const demoReady=s.mode==='simulation'&&patient&&alert&&canSimulateRecovery(patient,alert,s.now);
- const save=(recover:boolean)=>{
+ const save=async(recover:boolean)=>{
   if(!ready||(recover&&!demoReady))return;
-  d({type:'care',id:alertId,action,note,recover});
+  const saved=await d({type:'care',id:alertId,action,note,recover});
+  if(saved===false)return;
   setOpen(false);setAction('Select action');setNote('');
   toast.success(recover?'Action saved · simulated readings recovered':'Action saved · awaiting sensor recovery',{
    description:recover?'Cleared conditions move to history. Other warnings remain active.':'The alert stays under monitoring until valid readings return within limits.'

@@ -1,0 +1,65 @@
+import {type Patient,type Alert,type Event,type Notification,seedPatients,reconcileAlerts,generateDrop,applyScenario,scenarios,freshness,simulateAlertRecovery,canSimulateRecovery,getAlertWorkflow} from './engine';
+import {getCareRecommendation} from './care-assistant';
+export type Sample={at:number;bottle:number|null;rate:number|null;pressure:number|null;moisture:number|null;strain:number|null};
+export type Preferences={privacy:boolean;sound:boolean;vibration:boolean;criticalSound:boolean;warningSound:boolean;reminders:boolean;criticalInterval:number;warningInterval:number;escalation:boolean;escalationInterval:number;supervisor:string;timeout:number};
+export type State={patients:Patient[];alerts:Alert[];events:Event[];notifications:Notification[];history:Record<string,Sample[]>;handover:{notes:string;previous:string;completedAt:number|null};mode:'simulation'|'live';auto:boolean;now:number;ready:boolean;connection:string;role:string;user:string;session:boolean;prefs:Preferences;reminded:Record<string,number>;lastActivity:number;revision?:number;storageError?:string};
+const defaults:Preferences={privacy:false,sound:true,vibration:false,criticalSound:true,warningSound:true,reminders:false,criticalInterval:0,warningInterval:0,escalation:false,escalationInterval:0,supervisor:'Nurse station',timeout:30};
+export const initial:State={patients:[],alerts:[],events:[],notifications:[],history:{},handover:{notes:'',previous:'No previous handover recorded in this workspace.',completedAt:null},mode:'simulation',auto:true,now:0,ready:false,connection:'Simulated connections',role:'Nurse',user:'Nurse Priya',session:true,prefs:defaults,reminded:{},lastActivity:0};
+const event=(patientId:string,message:string,kind:string,at:number,nurse?:string):Event=>({id:crypto.randomUUID(),patientId,message,kind,at,nurse});
+function update(s:State,ps:Patient[],now:number):State{const alerts=reconcileAlerts(s.alerts,ps,now),events=[...s.events],notifications=s.notifications.map(n=>({...n}));for(const a of alerts){const old=s.alerts.find(b=>b.id===a.id);if(!old||(!old.resolved&&a.resolved)){const resolved=a.resolved;if(resolved){for(const n of notifications){if(n.alertId===a.id||n.id===`${a.id}-raised`)n.read=true;}}events.push(event(a.patientId,`${a.message} ${resolved?'resolved — sensor returned within limits':'raised'}`,resolved?'resolution':'alert',now));notifications.push({id:`${a.id}-${resolved?'resolved':'raised'}`,patientId:a.patientId,alertId:a.id,message:`Bed ${a.bed} · ${a.message}${resolved?' resolved':''}`,at:now,group:resolved?'Resolved':a.severity==='offline'?'Device / Connectivity':a.severity==='critical'?'Critical':'Warnings',read:false});}}
+ const history={...s.history};for(const p of ps){const old=history[p.patient.id]??[];if(!old.length||now-old[old.length-1].at>=5000){const a=freshness(p,1,now)==='current',b=freshness(p,2,now)==='current';history[p.patient.id]=[...old,{at:now,bottle:a?p.esp32_1.bottle_level:null,rate:a?p.esp32_1.drop_rate:null,pressure:a?p.esp32_1.pressure:null,moisture:b?p.esp32_2.moisture:null,strain:b?p.esp32_2.strain:null}].filter(x=>now-x.at<=12*3600000);}}
+ return {...s,patients:ps,alerts,events,notifications,history,now};}
+function reduceState(s:State,a:any):State{const now=a.now??Date.now();switch(a.type){
+ case 'init':{const restored=a.saved??{};const loaded=restored.patients?.length?restored.patients:seedPatients(now);const ps=loaded.map((p:Patient)=>restored.auto!==false&&p.gateway.node_red&&p.gateway.wifi?{...p,esp32_1:{...p.esp32_1,last_received:p.esp32_1.connected&&p.gateway.esp_now?now:p.esp32_1.last_received},esp32_2:{...p.esp32_2,last_received:p.esp32_2.connected?now:p.esp32_2.last_received}}:p);return update({...initial,...restored,prefs:{...defaults,...restored.prefs},ready:true,now,lastActivity:now,mode:'simulation',connection:'Simulated connections'},ps,now);}
+ case 'sync':return (a.saved.revision??0)>(s.revision??0)?{...a.saved,ready:true,now,storageError:undefined}:s;
+ case 'storage-error':return {...s,storageError:a.message};
+ case 'tick':{if(!s.ready)return s;let ps=s.patients;if(s.mode==='simulation')ps=ps.map(p=>{let q=structuredClone(p);const a=q.esp32_1,b=q.esp32_2;if(s.auto&&q.gateway.node_red&&q.gateway.wifi){if(a.connected&&q.gateway.esp_now){a.last_received=now;if(now-(q.drops.at(-1)??0)>=3000)q=generateDrop(q,now);}if(b.connected)b.last_received=now;}q.drops=q.drops.filter(t=>now-t<60000);q.esp32_1.drop_rate=q.drops.length;return q;});let next=update(s,ps,now);const reminded={...s.reminded};for(const alert of next.alerts.filter(x=>!x.resolved&&!x.acknowledged)){const minutes=alert.severity==='critical'?s.prefs.criticalInterval:alert.severity==='warning'?s.prefs.warningInterval:0;const due=s.prefs.reminders&&minutes>0&&now-(reminded[alert.id]??alert.createdAt)>=minutes*60000;if(due){next.notifications.push({id:crypto.randomUUID(),patientId:alert.patientId,alertId:alert.id,message:`Reminder · Bed ${alert.bed} · ${alert.message}`,at:now,group:alert.severity==='critical'?'Critical':'Warnings',read:false});reminded[alert.id]=now;}const key=`${alert.id}-escalated`;if(s.prefs.escalation&&s.prefs.escalationInterval>0&&alert.severity==='critical'&&!reminded[key]&&now-alert.createdAt>=s.prefs.escalationInterval*60000){next.notifications.push({id:crypto.randomUUID(),patientId:alert.patientId,alertId:alert.id,message:`Escalation to ${s.prefs.supervisor} (simulated) · Bed ${alert.bed}`,at:now,group:'Critical',read:false});next.events.push(event(alert.patientId,'Escalation simulated to '+s.prefs.supervisor,'escalation',now));reminded[key]=now;}}return {...next,reminded,session:s.session&&now-s.lastActivity<s.prefs.timeout*60000};}
+ case 'ack':{if(!s.session)return s;const target=s.alerts.find(x=>x.id===a.id);if(!target||target.resolved||target.acknowledged)return s;return {...s,alerts:s.alerts.map(x=>x.id===a.id?{...x,acknowledged:true,acknowledgedBy:s.user,acknowledgedAt:now}:x),events:[...s.events,event(target.patientId,`${target.message} acknowledged by ${s.user}`,'acknowledgement',now,s.user)]};}
+ case 'assist':{
+  const target=s.alerts.find(x=>x.id===a.id),patient=s.patients.find(p=>p.patient.id===target?.patientId);
+  if(!s.session||!target||!patient||target.resolved)return s;
+  const plan=getCareRecommendation(target,patient,now);
+  if(a.recover&&(s.mode!=='simulation'||!plan.canRecover))return s;
+  const acknowledged=target.acknowledged?s:reduceState(s,{type:'ack',id:target.id,now});
+  return reduceState(acknowledged,{type:'care',id:target.id,action:a.recover?'Demo recovery applied':'Recommendation reviewed',note:a.recover?`Rule-based demo suggestion: ${plan.title}. Simulated readings updated; no physical intervention is implied.`:'Recommendation reviewed. '+plan.title,recover:!!a.recover,assisted:true,now});
+ }
+ case 'care':{
+  const target=s.alerts.find(x=>x.id===a.id);
+  const patient=s.patients.find(p=>p.patient.id===target?.patientId);
+  if(!s.session||!target||!patient||target.resolved||!target.acknowledged||typeof a.action!=='string'||!a.action.trim())return s;
+  if(a.recover&&(s.mode!=='simulation'||!canSimulateRecovery(patient,target,now)))return s;
+  const action={id:crypto.randomUUID(),action:a.action.trim().slice(0,200),note:String(a.note??'').trim().slice(0,1000),nurse:s.user,at:now,simulatedRecovery:!!a.recover,assisted:!!a.assisted};
+  const recovered=a.recover?simulateAlertRecovery(patient,target,now):patient;
+  // One IV-site intervention may clear related moisture/strain episodes together.
+  const afterKeys=new Set(reconcileAlerts(s.alerts,[recovered],now).filter(x=>x.patientId===target.patientId&&x.resolved&&!s.alerts.find(old=>old.id===x.id)?.resolved).map(x=>x.id));
+  const related=target.key==='critical'?s.alerts.filter(x=>x.patientId===target.patientId&&!x.resolved&&['moisture','strain'].includes(x.key)).map(x=>x.id):[];
+  const ids=new Set([target.id,...related,...(a.recover?afterKeys:[])]);
+  const alerts=s.alerts.map(x=>ids.has(x.id)?{...x,acknowledged:true,acknowledgedBy:x.acknowledgedBy??s.user,acknowledgedAt:x.acknowledgedAt??now,actions:[...(x.actions??[]),action]}:x);
+  const events=[...s.events,event(target.patientId,`${action.action}${action.note?' — '+action.note:''} · ${target.message}${a.recover?' · simulated sensor recovery requested':' · awaiting sensor recovery'}`,'care',now,s.user)];
+  return update({...s,alerts,events},s.patients.map(p=>p.patient.id===patient.patient.id?recovered:p),now);
+ }
+ case 'note':return a.text.trim()?{...s,events:[...s.events,event(a.id,a.text.trim(),'note',now,s.user)]}:s;
+ case 'audit':return {...s,events:[...s.events,event(a.id??'',a.message,a.kind??'activity',now,s.user)]};
+ case 'read':return {...s,notifications:s.notifications.map(n=>a.id==='all'||n.id===a.id?{...n,read:true}:n)};
+ case 'scenario':if(s.mode!=='simulation')return s;return update({...s,events:[...s.events,event(a.id,'Demo scenario: '+a.name,'simulation',now,s.user)]},s.patients.map(p=>p.patient.id===a.id?applyScenario(p,a.name,now):p),now);
+ case 'sensor':if(s.mode!=='simulation')return s;return update({...s,events:[...s.events,event(a.id,`Demo ${a.key}: ${a.value}`,'sensor',now)]},s.patients.map(p=>{if(p.patient.id!==a.id)return p;return {...p,[a.module]:{...(p as any)[a.module],[a.key]:a.value,...(a.module==='gateway'?{}:{last_received:now})}}}),now);
+ case 'drop':return s.mode==='simulation'?update({...s,events:[...s.events,event(a.id,'Drop detected +1','drop',now)]},s.patients.map(p=>p.patient.id===a.id?generateDrop(p,now):p),now):s;
+ case 'auto':return {...s,auto:a.value};
+ case 'reset':return s.mode==='simulation'?update({...s,auto:true,events:[...s.events,event('','Simulation readings reset; history retained','simulation',now,s.user)]},seedPatients(now),now):s;
+ case 'prefs':return {...s,prefs:{...s.prefs,...a.value}};
+ case 'assign':if(s.role==='Nurse')return s;return {...s,patients:s.patients.map(p=>p.patient.id===a.id?{...p,patient:{...p.patient,nurse:a.nurse}}:p),events:[...s.events,event(a.id,'Assigned to '+a.nurse,'assignment',now,s.user)]};
+ case 'handover':return {...s,handover:{...s.handover,notes:a.text}};
+ case 'complete':return {...s,handover:{notes:'',previous:`${new Date(now).toLocaleString()} · ${s.user}\n${s.handover.notes}\nUnresolved alerts: ${s.alerts.filter(x=>!x.resolved).length}`,completedAt:now},events:[...s.events,event('','Handover completed','handover',now,s.user)]};
+ case 'logout':return {...s,session:false,events:[...s.events,event('','Demo session signed out','session',now,s.user)]};
+ case 'login':return {...s,session:true,role:a.role,user:a.role==='Nurse'?'Nurse Priya':a.role==='Supervisor'?'Supervisor Ananya':'Administrator',lastActivity:now,events:[...s.events,event('','Demo session signed in: '+a.role,'session',now)]};
+ case 'activity':return {...s,lastActivity:now};
+ case 'mode':return {...initial,ready:true,mode:a.mode,auto:a.mode==='simulation',prefs:s.prefs,role:s.role,user:s.user,lastActivity:now,now,patients:a.mode==='simulation'?seedPatients(now):[],connection:a.mode==='live'?'Connecting to live source…':'Simulated connections'};
+ case 'packet':return update(s,[...s.patients.filter(p=>!a.patients.some((q:Patient)=>q.patient.id===p.patient.id)),...a.patients],now);
+ case 'connection':{const failed=/disconnected|interrupted|Unable/.test(a.value);const next={...s,connection:a.value,events:s.connection===a.value?s.events:[...s.events,event('',a.value,'device',now)]};return failed?update(next,s.patients.map(p=>({...p,gateway:{...p.gateway,node_red:false}})),now):next;}
+ default:return s;}}
+export function reducer(s:State,a:any):State {
+ const next=reduceState(s,a);
+ if(next===s||['init','sync','storage-error','activity'].includes(a.type))return next;
+ const changed=a.type!=='tick'||next.events.length!==s.events.length;
+ return changed?{...next,revision:Math.max(a.now??Date.now(),(s?.revision??0)+1)}:next;
+}

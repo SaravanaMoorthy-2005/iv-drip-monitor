@@ -20,9 +20,9 @@ Open http://localhost:5173. The first visit opens the demo dashboard. Settings �
 - Exact centralized thresholds: bottle ≤15%, pressure >85%, air bubble true; moisture warning ≥50%, strain warning ≥50%; critical requires moisture ≥70% **and** strain ≥60%.
 - Episode-based alert creation, deduplication, nursing acknowledgement with identity and time, sensor-driven resolution, notes, historical CSV export and a unified timeline.
 - Ward bed tiles, five selectable interactive trend charts with threshold lines and time windows, device detail, hardware response representations and system flow.
-- Handover records, nurse assignment for supervisor/admin demonstration roles, separate notification read state, optional configured reminder/escalation notifications.
+- Handover records, nurse assignment for the authenticated workspace owner, separate notification read state, optional configured reminder/escalation notifications.
 - Ten demo scenarios, manual sliders, drop event generation and event-derived rates, network switches, automatic simulation start/stop and non-destructive reset.
-- Light/dark themes, privacy mode, demo roles, inactivity logout, mobile navigation, accessible native/component controls, responsive phone/tablet/desktop layouts.
+- Light/dark themes, privacy mode, authenticated workspaces, inactivity logout, mobile navigation, accessible native/component controls, responsive phone/tablet/desktop layouts.
 
 ## Data architecture
 
@@ -35,20 +35,22 @@ Open http://localhost:5173. The first visit opens the demo dashboard. Settings �
 
 In demo mode, **Save action & simulate recovery** explicitly changes only the selected alert's relevant simulated sensor values. A combined IV-site recovery clears its related moisture and strain episodes together, with shared documentation. Other patient readings and unrelated warnings are preserved. This control is blocked for live, stale, offline or invalid sensor data. For connection faults, restore the connection in the demo studio or wait for valid live packets. General notes do not replace the structured action workflow.
 
-Action records and lifecycle changes are saved immediately to the local demo archive. The alert center separates **Needs response**, **Awaiting recovery**, and **Resolved**, while sensor severity stays visible until actual recovery.
+Action records and lifecycle changes are saved immediately through authenticated APIs to the D1 database. The alert center separates **Needs response**, **Awaiting recovery**, and **Resolved**, while sensor severity stays visible until actual recovery.
 
-`lib/tissense/engine.ts` contains the normalized patient model, validation, immutable threshold configuration, derived statuses and alert reconciliation. `lib/tissense/store.tsx` holds separately managed current readings, alert episodes, time-series samples, notification state, nurse/device activity, preferences and handover.
+`lib/tissense/engine.ts` contains sensor validation and alert reconciliation. `state-core.ts` holds the shared reducer. The browser store sends validated commands to `/api/monitoring`; it never reports a clinical action as saved before server confirmation. The server attaches the authenticated identity and timestamp, applies the reducer and atomically persists the result.
 
-`lib/tissense/providers.ts` defines `SensorDataProvider`, `SimulationDataProvider`, `NodeRedProvider`, `WebSocketProvider`, `RESTProvider`, and `MQTTBridgeProvider`. MQTT traffic must be bridged through Node-RED WebSocket transport. No raw MQTT/TCP connection is made by the browser.
+Each account has separate sample and live workspaces. D1 stores current patients/preferences/handovers in `monitoring_workspaces` and alert episodes, audit events, notifications and trend samples in `monitoring_records`. Optimistic versions and a transactional write token prevent concurrent changes from overwriting each other; stale commands return HTTP 409 for review. Trend samples persist once per minute and the chart loads the latest 12 hours. Views load all active episodes, the latest 2,000 resolved episodes and 3,000 events/notifications; older records remain in the database. Establish a retention policy before collecting real patient data.
 
-The demo archive is **device-local**, saved to browser storage every five seconds. Samples retain up to 12 hours; saved activity, alerts and notifications retain the latest 3,000 entries per collection. Live patient data is memory-only, intentionally not written to browser storage. Deploying a hospital version requires an authenticated, durable server data store, access enforcement and a retention policy; demo role switches are not security boundaries. Hosted private Sites access supplies the platform sign-in boundary.
+Existing browser-only archives are left untouched and are not automatically imported. Server workspaces start with fictional sample patients. Simulation and reminder evaluation advance while the monitoring app polls; live alerts also reconcile on incoming telemetry. There is no background scheduled alert dispatcher. Network failures show an explicit error and preserve visible readings without claiming they are current.
 
-## Connect Node-RED
+## Connect a future device gateway
 
-1. Copy `.env.example` to `.env` and configure `NEXT_PUBLIC_NODE_RED_WS_URL` or `NEXT_PUBLIC_NODE_RED_REST_URL`. These are browser-visible endpoint URLs, not secret credentials.
-2. Restart/rebuild. Use WSS/HTTPS from a hosted HTTPS application and configure appropriate origin access on your gateway. Node-RED should authenticate its own endpoint in a production deployment.
-3. In Settings apply the Administrator demonstration role, then switch the source to live monitoring. Source switching clears the visible monitoring collections so simulation cannot mix into live records.
-4. Send one full normalized patient object, an array, or `{ "patients": [...] }`. REST is polled every three seconds and WebSocket reconnects after five seconds. Missing, invalid or unavailable values render as unavailable, never fabricated.
+1. Settings → Connected application shows server health and the telemetry key controls. Create a key; its plaintext is shown once and only its SHA-256 hash is stored. Rotate or revoke it there.
+2. POST JSON packets to `/api/telemetry` with `Authorization: Bearer <key>`. A key only permits telemetry ingestion; it does not authorize reading patient records or recording nurse actions.
+3. The private hosting access boundary also applies. A gateway needs approved hosting access as well as its telemetry key. Real hardware and Node-RED are not configured in this sample-data deployment.
+4. Switch to live monitoring in Settings. Source switching preserves each workspace. Accepts a patient object, an array or `{ "patients": [...] }`, maximum 50 packets and 256 KB per request. Older module timestamps are rejected. Missing/invalid readings remain unavailable and cannot clear existing sensor alerts.
+
+The legacy browser provider adapters remain as examples; the deployed application uses the server ingestion API.
 
 Example complete packet:
 
@@ -67,12 +69,14 @@ Replace example timestamps with the actual packet timestamps. A module is delaye
 
 All reminders and escalations are in-app demonstrations. They do not contact nurses, supervisors, SMS, push services, or hospital systems. Sound/vibration depend on browser and device support. Reminder/escalation intervals default to unset and must be explicitly configured. Acknowledgement does not turn off the represented hardware buzzer; actual output is not controlled by this UI. Chart gaps identify unavailable values; charts do not invent a preceding history.
 
-The source is React functional components with TypeScript, organized CSS, Recharts and Lucide. It retains the Sites Vinext starter and accessible installed component primitives; application styling uses ordinary CSS. Hash navigation preserves the active in-memory monitoring state. Core views can also be loaded through `/dashboard`, `/patients`, `/patients/P001`, `/ward`, `/alerts`, `/history`, `/handover`, `/devices`, `/demo`, `/settings`, and `/login`.
+The source is React functional components with TypeScript, organized CSS, Recharts and Lucide. It retains the Sites Vinext starter and accessible installed component primitives; application styling uses ordinary CSS. Hash navigation uses the same persisted account workspace. Core views can also be loaded through `/dashboard`, `/patients`, `/patients/P001`, `/ward`, `/alerts`, `/history`, `/handover`, `/devices`, `/demo`, `/settings`, and `/login`.
 
 ## Verification
 
 ```sh
 node --experimental-strip-types --test tests/engine.test.ts
+node --test tests/workflows.mjs
+node tests/backend.mjs # requires the local development server and migrated local database
 npx tsc --noEmit
 npm run build
 ```

@@ -3,12 +3,12 @@ import ts from 'typescript';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 await fs.mkdir('.test-runtime',{recursive:true});
-for(const [name,extension] of [['engine','ts'],['providers','ts'],['store','tsx'],['equipment','ts'],['care-assistant','ts']]){
+for(const [name,extension] of [['engine','ts'],['providers','ts'],['state-core','ts'],['equipment','ts'],['care-assistant','ts']]){
  const src=await fs.readFile(`lib/tissense/${name}.${extension}`,'utf8');
  const code=ts.transpileModule(src,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022,jsx:ts.JsxEmit.ReactJSX}}).outputText.replaceAll("'./engine'","'./engine.mjs'").replaceAll("'./providers'","'./providers.mjs'");
  await fs.writeFile(`.test-runtime/${name}.mjs`,code.replaceAll("'./care-assistant'","'./care-assistant.mjs'"));
 }
-const {reducer}=await import('../.test-runtime/store.mjs');
+const {reducer}=await import('../.test-runtime/state-core.mjs');
 const now=Date.now();
 const init=()=>reducer(undefined,{type:'init',now});
 const {patientCareState,getCareRecommendation}=await import('../.test-runtime/care-assistant.mjs');
