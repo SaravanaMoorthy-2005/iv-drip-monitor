@@ -1,0 +1,12 @@
+.git
+.env*
+!.env.example
+.wrangler
+.sites-runtime
+.test-runtime
+.openai
+dist
+outputs
+work
+tests
+vendor

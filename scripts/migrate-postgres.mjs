@@ -1,0 +1,10 @@
+import {readFile} from 'node:fs/promises';
+import {neon} from '@neondatabase/serverless';
+import {loadEnvConfig} from '@next/env';
+loadEnvConfig(process.cwd());
+if(!process.env.DATABASE_URL)throw new Error('Set DATABASE_URL before running database migrations.');
+const sql=neon(process.env.DATABASE_URL);
+const migration=await readFile(new URL('../db/migrations/001_postgres.sql',import.meta.url),'utf8');
+const statements=migration.split(';').map(s=>s.trim()).filter(Boolean);
+await sql.transaction(statements.map(s=>sql.query(s,[])));
+console.log('TISSENSE PostgreSQL migration applied successfully.');

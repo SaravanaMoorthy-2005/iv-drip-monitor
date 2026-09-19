@@ -1,93 +1,62 @@
-# TISSENSE
+# TISSENSE — Vercel edition
 
-A responsive, nurse-centered IV monitoring **prototype**. Fictional data is always marked as simulated. This is an early-warning interface, not a diagnostic or treatment system and not a clinically validated medical device.
+A public IV-monitoring prototype with a Next.js frontend, server API routes and Neon PostgreSQL persistence. Fictional sample patients only. Real-device ingestion is disabled on this public edition. The previously published Sites application is separate; these source changes do not redeploy it.
 
-## Run locally
+## Public visitor experience
+
+Visitors open the app without a hosting account. The server issues a random, HttpOnly, SameSite session cookie and stores only its hash. Each visitor receives an isolated database workspace containing 12 fictional patients. Actions, alerts, preferences, assignments and handovers persist across reloads in the same browser for 30 days. Browser cookie deletion, session expiry or ending the session requires a new workspace. There is no cross-device staff account login in this public sample edition.
+
+The dashboard, patient pages, animated IV equipment, monitoring gauges, care recommendations, scenarios, alert history, notes and handovers remain available. Recommendations are predefined rules, not an external AI model or autonomous treatment.
+
+Acknowledgement records receipt. A documentation-only action leaves an out-of-range condition under monitoring. Explicit sample recovery changes the affected fictional sensor readings and closes only the matching and related alert episodes. Resolved alerts remain in history. Reloading never reopens a recovered condition without a new abnormal reading.
+
+## Local development
 
 Requires Node.js 22.13 or newer.
 
-```sh
-npm run install:ci
+```powershell
+npm ci
+$env:TISSENSE_LOCAL_DB='1'
 npm run dev
 ```
 
-Open http://localhost:5173. The first visit opens the demo dashboard. Settings → Sign out opens the nurse login; demonstration credentials are `NURSE001` / `tissense`. They are public demo credentials, not hospital authentication.
+Open http://localhost:3000. Local testing uses PGlite (PostgreSQL), stored in ignored `.test-runtime/local-postgres`. It initializes the same SQL schema automatically and is explicitly disabled in production. To use Neon locally instead, set a server-only `DATABASE_URL` in `.env.local`, disable `TISSENSE_LOCAL_DB`, run `npm run db:migrate`, then start the app.
 
-## What works
+## Vercel deployment
 
-- Twelve fictional patients, automatic urgency sorting, search and ward/room/bed/assigned-nurse filters.
-- Dynamic summary cards, priority banner, patient monitoring, seven sensor values, module and overall statuses.
-- Exact centralized thresholds: bottle ≤15%, pressure >85%, air bubble true; moisture warning ≥50%, strain warning ≥50%; critical requires moisture ≥70% **and** strain ≥60%.
-- Episode-based alert creation, deduplication, nursing acknowledgement with identity and time, sensor-driven resolution, notes, historical CSV export and a unified timeline.
-- Ward bed tiles, five selectable interactive trend charts with threshold lines and time windows, device detail, hardware response representations and system flow.
-- Handover records, nurse assignment for the authenticated workspace owner, separate notification read state, optional configured reminder/escalation notifications.
-- Ten demo scenarios, manual sliders, drop event generation and event-derived rates, network switches, automatic simulation start/stop and non-destructive reset.
-- Light/dark themes, privacy mode, authenticated workspaces, inactivity logout, mobile navigation, accessible native/component controls, responsive phone/tablet/desktop layouts.
+1. Connect the intended Vercel account and a Neon database. Create the TISSENSE project from this checkout using the Vercel CLI or a Git repository.
+2. Add the Neon connection string as `DATABASE_URL` in Vercel's server environment for Production (and a separate test database for Preview if previews are enabled). Never use a NEXT_PUBLIC prefix for database secrets.
+3. Deploy to Production. `vercel.json` selects Next.js and runs the idempotent PostgreSQL migration before the production build. A missing database connection fails deployment instead of publishing an app with broken storage.
+4. Set the production deployment's access to public, without Vercel Authentication or a password gate. Verify the assigned production URL from an unauthenticated browser.
+5. In the app, Settings → Connected application must report backend and database connected. Apply a sample recovery and reload; confirm the episode remains resolved. Open another browser session and confirm records are isolated.
 
-## Data architecture
+Vercel and Neon account access is required to perform these steps. Preparing this branch or running a local build does not create a public deployment URL.
 
-### Completing an alert response
+## Backend and database
 
-1. **Acknowledge** records that the nurse has seen the warning.
-2. **Record action** documents the action, optional note, nurse and timestamp.
-3. **Save action · await readings** places the episode under **Awaiting recovery**. Live sensor values are never changed by documentation.
-4. Once valid current readings clear the condition, the episode automatically becomes **Resolved**, leaves active alerts and remains in history and the timeline. A recurring condition creates a new episode requiring a fresh response.
+- `POST /api/session`: creates/reuses a visitor session; new sessions are limited to 100 per network address per hour.
+- `DELETE /api/session`: revokes the current session and removes its cookie.
+- `GET /api/monitoring`: reads the visitor's sample workspace and advances active simulation.
+- `POST /api/monitoring`: validates and saves allowed actions, deriving identity and timestamps on the server.
+- `GET /api/health`: checks the connected backend/database for the current session.
+- Live source access, device-key creation and telemetry ingestion return 403 on this public edition.
 
-In demo mode, **Save action & simulate recovery** explicitly changes only the selected alert's relevant simulated sensor values. A combined IV-site recovery clears its related moisture and strain episodes together, with shared documentation. Other patient readings and unrelated warnings are preserved. This control is blocked for live, stale, offline or invalid sensor data. For connection faults, restore the connection in the demo studio or wait for valid live packets. General notes do not replace the structured action workflow.
+Schema: `db/migrations/001_postgres.sql`. Database driver: `db/postgres.ts`. Monitoring persistence: `lib/tissense/repository.ts`. Legacy Cloudflare/Drizzle files remain for reference and are not used in the Vercel build or migrations.
 
-Action records and lifecycle changes are saved immediately through authenticated APIs to the D1 database. The alert center separates **Needs response**, **Awaiting recovery**, and **Resolved**, while sensor severity stays visible until actual recovery.
+Optimistic versions and atomic PostgreSQL transactions prevent concurrent actions from overwriting each other. A stale action returns HTTP 409 and refreshes the displayed readings for review. No client action is reported as saved before server confirmation. Database errors are visible; there is no browser-only storage fallback.
 
-`lib/tissense/engine.ts` contains sensor validation and alert reconciliation. `state-core.ts` holds the shared reducer. The browser store sends validated commands to `/api/monitoring`; it never reports a clinical action as saved before server confirmation. The server attaches the authenticated identity and timestamp, applies the reducer and atomically persists the result.
+Trend samples persist once per minute while monitoring runs. Charts load the last 12 hours. Views load every active episode, the latest 2,000 resolved episodes and 3,000 activity/notification records; older records remain in the database. Session expiry prevents access but is not a deletion policy. Establish storage retention and scheduled cleanup for a long-running deployment.
 
-Each account has separate sample and live workspaces. D1 stores current patients/preferences/handovers in `monitoring_workspaces` and alert episodes, audit events, notifications and trend samples in `monitoring_records`. Optimistic versions and a transactional write token prevent concurrent changes from overwriting each other; stale commands return HTTP 409 for review. Trend samples persist once per minute and the chart loads the latest 12 hours. Views load all active episodes, the latest 2,000 resolved episodes and 3,000 events/notifications; older records remain in the database. Establish a retention policy before collecting real patient data.
+Simulation/reminders run while the app polls; there is no unattended background alert dispatcher. Sound and vibration depend on browser support. This prototype is not a clinically validated medical device and must not receive real patient information.
 
-Existing browser-only archives are left untouched and are not automatically imported. Server workspaces start with fictional sample patients. Simulation and reminder evaluation advance while the monitoring app polls; live alerts also reconcile on incoming telemetry. There is no background scheduled alert dispatcher. Network failures show an explicit error and preserve visible readings without claiming they are current.
-
-## Connect a future device gateway
-
-1. Settings → Connected application shows server health and the telemetry key controls. Create a key; its plaintext is shown once and only its SHA-256 hash is stored. Rotate or revoke it there.
-2. POST JSON packets to `/api/telemetry` with `Authorization: Bearer <key>`. A key only permits telemetry ingestion; it does not authorize reading patient records or recording nurse actions.
-3. The private hosting access boundary also applies. A gateway needs approved hosting access as well as its telemetry key. Real hardware and Node-RED are not configured in this sample-data deployment.
-4. Switch to live monitoring in Settings. Source switching preserves each workspace. Accepts a patient object, an array or `{ "patients": [...] }`, maximum 50 packets and 256 KB per request. Older module timestamps are rejected. Missing/invalid readings remain unavailable and cannot clear existing sensor alerts.
-
-The legacy browser provider adapters remain as examples; the deployed application uses the server ingestion API.
-
-Example complete packet:
-
-```json
-{
-  "patient": { "id": "P001", "name": "Example Patient", "bed": "01", "room": "201", "ward": "Ward A", "nurse": "Nurse Priya" },
-  "esp32_1": { "connected": true, "bottle_level": 75, "drop_count": 146, "drop_rate": 22, "pressure": 35, "air_bubble": false, "last_received": "2026-09-14T15:30:00Z" },
-  "esp32_2": { "connected": true, "moisture": 25, "strain": 20, "last_received": "2026-09-14T15:30:00Z" },
-  "gateway": { "esp_now": true, "wifi": true, "node_red": true }
-}
-```
-
-Replace example timestamps with the actual packet timestamps. A module is delayed after 15 seconds and unavailable after 60 seconds. These are technical freshness windows, not clinical escalation policy. Missing data cannot resolve an existing sensor warning. Invalid percentage readings render as `—`, including negative bottle readings; they are never clamped into falsely normal values. Battery and firmware are not invented.
-
-## Prototype boundaries
-
-All reminders and escalations are in-app demonstrations. They do not contact nurses, supervisors, SMS, push services, or hospital systems. Sound/vibration depend on browser and device support. Reminder/escalation intervals default to unset and must be explicitly configured. Acknowledgement does not turn off the represented hardware buzzer; actual output is not controlled by this UI. Chart gaps identify unavailable values; charts do not invent a preceding history.
-
-The source is React functional components with TypeScript, organized CSS, Recharts and Lucide. It retains the Sites Vinext starter and accessible installed component primitives; application styling uses ordinary CSS. Hash navigation uses the same persisted account workspace. Core views can also be loaded through `/dashboard`, `/patients`, `/patients/P001`, `/ward`, `/alerts`, `/history`, `/handover`, `/devices`, `/demo`, `/settings`, and `/login`.
-
-## Verification
+## Checks
 
 ```sh
 node --experimental-strip-types --test tests/engine.test.ts
-node --test tests/workflows.mjs
-node tests/backend.mjs # requires the local development server and migrated local database
+npm run test:workflow
+npm run test:backend # local dev server must be running
 npx tsc --noEmit
 npm run build
 ```
 
-Tests cover all specified threshold boundaries, ten scenarios, deduplication, acknowledgement retention, resolution/retriggering, invalid input, stale/connection states, drop counting and urgency sorting. The browser workflow additionally verifies notes, scenarios, notifications, history, charts, login, handover and responsive layouts.
-
-
-### Care assistant and glass monitoring cards
-
-Each active alert has a rule-based care suggestion with its triggering value, configured threshold and suggested checks. The AI-assist preview is deterministic; no AI model is connected and no patient data is sent to an external AI service. Local clinical protocols govern real care. Site-assessment guidance links to the CDC catheter recommendations.
-
-In demo mode, **Apply demo recovery** atomically acknowledges the alert, records the simulated action, updates only affected readings and reconciles all linked episodes. **Record action** opens a prefilled form with **Complete action & recover demo** as its primary control. Documentation-only actions leave readings unchanged and show **Awaiting sensor recovery**; a combined critical-site assessment also covers its linked moisture/strain alerts. Live mode never changes telemetry through either action. Completed alert notifications are retained but marked read.
-
-The supplied liquid-glass template is adapted in `components/ui/liquid-glass-card.tsx`, `liquid-glass-button.tsx` and `financial-score-cards.tsx`. Its semicircle gauges display measured values with threshold-based colors, accessible labels, unique gradient IDs and reduced-motion support. Zero remains a valid reading and missing data is shown as unavailable.
+Backend checks cover public sessions, origin protection, validation, recovery persistence, conflicting updates, stale writes, visitor isolation, handovers, live-data restrictions, header-spoof rejection and logout.
